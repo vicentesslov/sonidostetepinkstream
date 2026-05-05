@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Kick Multi Sound Alerts + Cooldown - OBS</title>
+    <style>
+        body { background: transparent; margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+        #status  { color: #0f0; padding: 8px; background: rgba(0,0,0,0.6); border-radius: 6px; max-width: 400px; }
+        #log     { color: #aaa; font-size: 0.85em; max-height: 180px; overflow-y: auto; padding: 8px; }
+    </style>
+</head>
+<body>
+    <div id="status">Cargando...</div>
+    <div id="log"></div>
+
+    <script>
+        // ==================== CONFIGURACIÓN ====================
+        const USERNAME = "TetePink";  // ← TU username exacto en Kick
+
+        // Lista de comandos + sonidos (agregá los que quieras)
+        const COMMANDS = [
+            {
+                trigger: "11z",          // ahora se activa si el mensaje CONTIENE esta palabra
+                sound: "https://files.catbox.moe/t628zc.mp3",
+                volume: 0.9
+            },
+            {
+                trigger: "BOEEE",
+                sound: "https://files.catbox.moe/37747m.mp3",
+                volume: 1.0
+            },
+            {
+                trigger: "D:",
+                sound: "https://files.catbox.moe/fwodpd.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "run",
+                sound: "https://files.catbox.moe/4645w8.mp3",
+                volume: 0.7
+            },
+            {
+                trigger: "nono",
+                sound: "https://files.catbox.moe/inukp9.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "ants",
+                sound: "https://files.catbox.moe/g1aec5.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "SIII",
+                sound: "https://files.catbox.moe/jcjw6a.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "WOWERS",
+                sound: "https://files.catbox.moe/sp2blf.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "VoidDespair",
+                sound: "https://files.catbox.moe/p8zvuk.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "DinkDonk",
+                sound: "https://files.catbox.moe/gzpt7v.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "BRUH",
+                sound: "https://files.catbox.moe/b6ov24.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "Scared",
+                sound: "https://files.catbox.moe/cesgok.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "PepeLaugh",
+                sound: "https://files.catbox.moe/wa74vk.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "LOL",
+                sound: "https://files.catbox.moe/wa74vk.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "LMAO",
+                sound: "https://files.catbox.moe/wa74vk.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "Lmao",
+                sound: "https://files.catbox.moe/wa74vk.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "KEKW",
+                sound: "https://files.catbox.moe/gywbig.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "HijoDePerra",
+                sound: "https://files.catbox.moe/wh1yzp.mp3",
+                volume: 0.8
+            },
+            {
+                trigger: "EsUnChingoDePorno",
+                sound: "https://files.catbox.moe/m4n9mv.mp3",
+                volume: 0.8
+            },
+
+            // Ejemplo: { trigger: "brrr", sound: "...", volume: 0.6 }
+        ];
+
+        const COOLDOWN_SECONDS = 5;     // tiempo de cooldown por usuario por comando
+        // =========================================================
+
+        const status = document.getElementById('status');
+        const logDiv  = document.getElementById('log');
+        let audioElements = {};         // cache de audios
+        let lastUsed = new Map();       // clave: "username:triggerLower" → timestamp último uso
+        let chatroomId = null;
+        let ws = null;
+
+        function log(msg) {
+            const p = document.createElement('div');
+            p.textContent = new Date().toLocaleTimeString() + " " + msg;
+            logDiv.appendChild(p);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function playSound(url, vol = 1.0) {
+            if (!audioElements[url]) {
+                const audio = new Audio(url);
+                audio.preload = "auto";
+                audioElements[url] = audio;
+            }
+            const audio = audioElements[url];
+            audio.volume = vol;
+            audio.currentTime = 0;
+            audio.play().catch(err => {
+                console.log("Error audio:", err);
+                log("Error reproduciendo: " + err.message);
+            });
+        }
+
+        function isOnCooldown(username, triggerLower) {
+            const key = `${username.toLowerCase()}:${triggerLower}`;
+            const lastTime = lastUsed.get(key);
+            if (!lastTime) return false;
+
+            const now = Date.now();
+            const diff = (now - lastTime) / 1000;
+            if (diff < COOLDOWN_SECONDS) {
+                return true;
+            }
+            return false;
+        }
+
+        function setCooldown(username, triggerLower) {
+            const key = `${username.toLowerCase()}:${triggerLower}`;
+            lastUsed.set(key, Date.now());
+        }
+
+        async function iniciar() {
+            status.textContent = "Obteniendo chatroom...";
+            log("Iniciando para canal: " + USERNAME);
+
+            try {
+                const res = await fetch(`https://kick.com/api/v1/channels/${USERNAME}`);
+                if (!res.ok) throw new Error("No se encontró el canal");
+                const data = await res.json();
+                chatroomId = data.chatroom?.id;
+                if (!chatroomId) throw new Error("No hay chatroom ID");
+
+                status.textContent = `Chatroom ${chatroomId} — Esperando comandos (cooldown ${COOLDOWN_SECONDS}s por user)`;
+                log(`Conectado al chatroom ${chatroomId}`);
+
+                ws = new WebSocket("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false");
+
+                ws.onopen = () => {
+                    log("WebSocket abierto");
+                    const sub = {
+                        event: "pusher:subscribe",
+                        data: { auth: "", channel: `chatrooms.${chatroomId}.v2` }
+                    };
+                    ws.send(JSON.stringify(sub));
+                };
+
+                ws.onmessage = (event) => {
+                    let msg;
+                    try { msg = JSON.parse(event.data); } catch(e) { return; }
+
+                    if (msg.event === "App\\Events\\ChatMessageEvent") {
+                        let chatData;
+                        try { chatData = JSON.parse(msg.data); } catch(e) { return; }
+
+                        const content = (chatData.content || "").trim();
+                        const contentLower = content.toLowerCase();
+                        const sender = chatData.sender?.username || "???";
+
+                        log(`[${sender}] ${content}`);
+
+                        // Buscar comandos que estén contenidos en el mensaje
+                        for (const cmd of COMMANDS) {
+                            const triggerLower = cmd.trigger.trim().toLowerCase();
+                            if (contentLower.includes(triggerLower)) {
+                                if (isOnCooldown(sender, triggerLower)) {
+                                    log(`Cooldown activo para ${sender} → ${cmd.trigger}`);
+                                    continue;
+                                }
+
+                                log(`¡Comando detectado! → ${cmd.trigger} (por ${sender})`);
+                                playSound(cmd.sound, cmd.volume ?? 1.0);
+                                status.textContent = `Reproduciendo: ${cmd.trigger} (por ${sender})`;
+
+                                setCooldown(sender, triggerLower);
+
+                                // Opcional: break; si querés que solo active el primer comando encontrado
+                                // Si querés que active TODOS los que contenga, dejalo sin break
+                            }
+                        }
+                    }
+                };
+
+                ws.onerror   = (err) => { log("Error WS: " + err); status.textContent = "Error en conexión"; };
+                ws.onclose   = () => { log("WS cerrado → recargá página"); status.textContent = "Conexión cerrada"; };
+
+            } catch (err) {
+                status.textContent = "Error: " + err.message;
+                log("Fallo al iniciar: " + err);
+            }
+        }
+
+        window.onload = iniciar;
+    </script>
+</body>
+</html>
